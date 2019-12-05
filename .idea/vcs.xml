@@ -2,5 +2,10 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/python/training/classification" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/python/training/detection" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/python/training/segmentation" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/tools/camera-capture" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/utils" vcs="Git" />
   </component>
 </project>
