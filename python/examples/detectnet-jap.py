@@ -1,26 +1,10 @@
-# from PIL import Image 
-  
-# # Opens a image in RGB mode 
-# im = Image.open(r"C:\Users\Admin\Pictures\network.png") 
-  
-# # Setting the points for cropped image 
-# left = 155
-# top = 65
-# right = 360
-# bottom = 270
-  
-# # Cropped image of above dimension 
-# # (It will not change orginal image) 
-# im1 = im.crop((left, top, right, bottom)) 
-  
-# # Shows the image in image viewer 
-# im1.show() 
 import jetson.inference
 import jetson.utils
 
 import argparse
 import sys
 from PIL import Image 
+import tempfile
 
 # parse the command line
 parser = argparse.ArgumentParser(description="Locate objects in a live camera stream using an object detection DNN.", 
@@ -48,6 +32,7 @@ camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
 display = jetson.utils.glDisplay()
 
 # process frames until user exits
+# tmpdirname = tempfile.TemporaryDirectory()
 while display.IsOpen():
 	# capture the image
 	img, width, height = camera.CaptureRGBA()
@@ -60,6 +45,13 @@ while display.IsOpen():
 
 	for detection in detections:
 		print(detection)
+
+		# array = jetson.utils.cudaToNumpy(img, height, width, 4)		
+		# im = Image.fromarray(array, "RGBA")
+		# cropped = im.crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
+		# path = tmpdirname + "/" + str(detection.Instance) + ".png"
+		# cropped.save(path) 
+		# print("detection stored at: " + path)
 
 	# render the image
 	display.RenderOnce(img, width, height)

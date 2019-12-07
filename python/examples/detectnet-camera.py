@@ -26,6 +26,8 @@ import jetson.utils
 
 import argparse
 import sys
+from PIL import Image 
+import tempfile
 
 # parse the command line
 parser = argparse.ArgumentParser(description="Locate objects in a live camera stream using an object detection DNN.", 
@@ -53,25 +55,32 @@ camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
 display = jetson.utils.glDisplay()
 
 # process frames until user exits
-while display.IsOpen():
-	# capture the image
-	img, width, height = camera.CaptureRGBA()
+with tempfile.TemporaryDirectory() as tmpdirname: 
+	while display.IsOpen():
+		# capture the image
+		img, width, height = camera.CaptureRGBA(zeroCopy=1)
 
-	# detect objects in the image (with overlay)
-	detections = net.Detect(img, width, height, opt.overlay)
+		# detect objects in the image (with overlay)
+		detections = net.Detect(img, width, height, opt.overlay)
 
-	# print the detections
-	print("detected {:d} objects in image".format(len(detections)))
+		# print the detections
+		print("detected {:d} objects in image".format(len(detections)))
+		array = jetson.utils.cudaToNumpy(img, width, height, 4)		
+		for detection in detections:
+			print(detection)
 
-	for detection in detections:
-		print(detection)
+			im = Image.fromarray(array, "RGBA")
+			cropped = im.crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
+			path = tmpdirname + "/" + str(detection.Instance) + ".png"
+			cropped.save(path, "PNG1") 
+			print("detection stored at: " + path)
 
-	# render the image
-	display.RenderOnce(img, width, height)
+		# render the image
+		display.RenderOnce(img, width, height)
 
-	# update the title bar
-	display.SetTitle("{:s} | Network {:.0f} FPS".format(opt.network, net.GetNetworkFPS()))
+		# update the title bar
+		display.SetTitle("{:s} | Network {:.0f} FPS".format(opt.network, net.GetNetworkFPS()))
 
-	# print out performance info
-	net.PrintProfilerTimes()
+		# print out performance info
+		net.PrintProfilerTimes()
 
