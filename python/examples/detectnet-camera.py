@@ -28,59 +28,98 @@ import argparse
 import sys
 from PIL import Image 
 import tempfile
+import numpy, cv2
+import aiohttp 
+import asyncio
+import json
+from io import BytesIO
+from aiohttp.web import HTTPCreated
 
-# parse the command line
-parser = argparse.ArgumentParser(description="Locate objects in a live camera stream using an object detection DNN.", 
-						   formatter_class=argparse.RawTextHelpFormatter, epilog=jetson.inference.detectNet.Usage())
+API_KEY = "abb6a29f-d60c-499f-a8e9-57a1af56c1a0" 
 
-parser.add_argument("--network", type=str, default="ssd-mobilenet-v2", help="pre-trained model to load (see below for options)")
-parser.add_argument("--overlay", type=str, default="box,labels,conf", help="detection overlay flags (e.g. --overlay=box,labels,conf)\nvalid combinations are:  'box', 'labels', 'conf', 'none'")
-parser.add_argument("--threshold", type=float, default=0.5, help="minimum detection threshold to use") 
-parser.add_argument("--camera", type=str, default="0", help="index of the MIPI CSI camera to use (e.g. CSI camera 0)\nor for VL42 cameras, the /dev/video device to use.\nby default, MIPI CSI camera 0 will be used.")
-parser.add_argument("--width", type=int, default=1280, help="desired width of camera stream (default is 1280 pixels)")
-parser.add_argument("--height", type=int, default=720, help="desired height of camera stream (default is 720 pixels)")
+async def upload(session, image_data):
+	data = aiohttp.FormData()
+	data.add_field('metadata', json.dumps({
+		'crop_id': 1,
+		'camera_id': 'asdfasdf',
+		'timestamp': 123,
+		'location': {
+			'latitude': 1234,
+			'longitude': 4567,
+		},
+		'tags': ['aff'],
+	}))
+	data.add_field('image', image_data, filename='image.png')
 
-try:
-	opt = parser.parse_known_args()[0]
-except:
-	print("")
-	parser.print_help()
-	sys.exit(0)
+	response = await session.post('http://3.16.160.221/api/v1/uploadCropWithMetadata',
+										data=data, headers={'X-Traces-API-Key': API_KEY})
+	
+	assert response.status == HTTPCreated.status_code
 
-# load the object detection network
-net = jetson.inference.detectNet(opt.network, sys.argv, opt.threshold)
+async def main():
+	# parse the command line
+	parser = argparse.ArgumentParser(description="Locate objects in a live camera stream using an object detection DNN.", 
+							formatter_class=argparse.RawTextHelpFormatter, epilog=jetson.inference.detectNet.Usage())
 
-# create the camera and display
-camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
-display = jetson.utils.glDisplay()
+	parser.add_argument("--network", type=str, default="ssd-mobilenet-v2", help="pre-trained model to load (see below for options)") 
+	parser.add_argument("--overlay", type=str, default="box,labels,conf", help="detection overlay flags (e.g. --overlay=box,labels,conf)\nvalid combinations are:  'box', 'labels', 'conf', 'none'")
+	parser.add_argument("--threshold", type=float, default=0.5, help="minimum detection threshold to use") 
+	parser.add_argument("--camera", type=str, default="0", help="index of the MIPI CSI camera to use (e.g. CSI camera 0)\nor for VL42 cameras, the /dev/video device to use.\nby default, MIPI CSI camera 0 will be used.")
+	parser.add_argument("--width", type=int, default=1280, help="desired width of camera stream (default is 1280 pixels)")
+	parser.add_argument("--height", type=int, default=720, help="desired height of camera stream (default is 720 pixels)")
 
-# process frames until user exits
-with tempfile.TemporaryDirectory() as tmpdirname: 
-	while display.IsOpen():
-		# capture the image
-		img, width, height = camera.CaptureRGBA(zeroCopy=1)
+	try:
+		opt = parser.parse_known_args()[0]
+	except:
+		print("")
+		parser.print_help()
+		sys.exit(0)
 
-		# detect objects in the image (with overlay)
-		detections = net.Detect(img, width, height, opt.overlay)
+	# load the object detection network
+	net = jetson.inference.detectNet(opt.network, sys.argv, opt.threshold)
 
-		# print the detections
-		print("detected {:d} objects in image".format(len(detections)))
-		array = jetson.utils.cudaToNumpy(img, width, height, 4)		
-		for detection in detections:
-			print(detection)
+	# create the camera and display
+	camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
+	# display = jetson.utils.glDisplay()
 
-			im = Image.fromarray(array, "RGBA")
-			cropped = im.crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
-			path = tmpdirname + "/" + str(detection.Instance) + ".png"
-			cropped.save(path, "PNG1") 
-			print("detection stored at: " + path)
+	# process frames until user exits
+	async with aiohttp.ClientSession() as session:
+		while True:
+			# capture the image
+			img, width, height = camera.CaptureRGBA(zeroCopy=1)
+			jetson.utils.cudaDeviceSynchronize()
 
-		# render the image
-		display.RenderOnce(img, width, height)
+			# detect objects in the image (with overlay)
+			detections = net.Detect(img, width, height, opt.overlay)
 
-		# update the title bar
-		display.SetTitle("{:s} | Network {:.0f} FPS".format(opt.network, net.GetNetworkFPS()))
+			# print the detections
+			print("detected {:d} objects in image".format(len(detections)))
+			array = jetson.utils.cudaToNumpy(img, width, height, 4)	
+			buf = BytesIO()	
+			for detection in detections:
+				print(detection)
+				# aimg = cv2.cvtColor(array.astype(numpy.uint8), cv2.COLOR_RGBA2BGR)
+				# cv2.imshow("Detection", aimg)
+				# cv2.waitKey()
+				# print(array.dtype)
+				# print(array.shape)    
+				im = Image.fromarray(array.astype(numpy.uint8), "RGBA")
+				crop = im.crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
+				crop.save(buf, format="png")
+				# cuda_mem = jetson.utils.cudaFromNumpy(numpy.array(crop))
+				# jetson.utils.saveImageRGBA(path, cuda_mem, int(detection.Width), int(detection.Height))
+				
+				await upload(session, buf.getvalue())
+			# render the image
+			# display.RenderOnce(img, width, height)
 
-		# print out performance info
-		net.PrintProfilerTimes()
+			# update the title bar
+			# display.SetTitle("{:s} | Network {:.0f} FPS".format(opt.network, net.GetNetworkFPS()))
 
+			# print out performance info
+			net.PrintProfilerTimes()
+
+
+if __name__  == "__main__":
+	loop = asyncio.get_event_loop()
+	loop.run_until_complete(main())
