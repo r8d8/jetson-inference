@@ -34,27 +34,53 @@ import asyncio
 import json
 from io import BytesIO
 from aiohttp.web import HTTPCreated
+import multiprocessing
+import concurrent.futures
+from datetime import datetime
 
 API_KEY = "abb6a29f-d60c-499f-a8e9-57a1af56c1a0" 
 
-async def upload(session, image_data):
+class CropImage:
+	def __init__(self, data, crop_id, camera_id, timestamp, location):
+		self.data = data
+		self.crop_id = crop_id
+		self.camera_id = camera_id 
+		self.timestamp = timestamp 
+		self.location = location
+
+async def upload(session, image_queue):
 	data = aiohttp.FormData()
+	img = image_queue.get()
 	data.add_field('metadata', json.dumps({
-		'crop_id': 1,
-		'camera_id': 'asdfasdf',
-		'timestamp': 123,
+		'crop_id': img.crop_id,
+		'camera_id': img.camera_id,
+		'timestamp': img.timestamp,
 		'location': {
-			'latitude': 1234,
-			'longitude': 4567,
+			'latitude': img.location[0],
+			'longitude': img.location[1],
 		},
 		'tags': ['aff'],
 	}))
-	data.add_field('image', image_data, filename='image.png')
+	data.add_field('image', img.data, filename='image.png')
 
 	response = await session.post('http://3.16.160.221/api/v1/uploadCropWithMetadata',
 										data=data, headers={'X-Traces-API-Key': API_KEY})
 	
-	assert response.status == HTTPCreated.status_code
+	if response.status != HTTPCreated.status_code:
+		print(">>> DEBUG: image upload failure. Request status code: ", response.status)
+
+def crop(camera_id, img, width, height, detections, image_queue):
+	array = jetson.utils.cudaToNumpy(img, width, height, 4)	
+	buf = BytesIO()	
+	for detection in detections:
+		print(detection)    
+		im = Image.fromarray(array.astype(numpy.uint8), "RGBA").crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
+		im.save(buf, format="png")
+
+		crop = CropImage(buf.getvalue(), 1, camera_id, datetime.now().strftime("%m/%d/%Y, %H:%M:%S"), (0, 0))
+
+		image_queue.put(crop)
+		
 
 async def main():
 	# parse the command line
@@ -80,46 +106,27 @@ async def main():
 
 	# create the camera and display
 	camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
-	# display = jetson.utils.glDisplay()
+	executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
 	# process frames until user exits
+	img_queue = multiprocessing.Queue()
+	loop = asyncio.get_event_loop()
 	async with aiohttp.ClientSession() as session:
 		while True:
 			# capture the image
 			img, width, height = camera.CaptureRGBA(zeroCopy=1)
 			jetson.utils.cudaDeviceSynchronize()
-
-			# detect objects in the image (with overlay)
 			detections = net.Detect(img, width, height, opt.overlay)
+			if len(detections):
+				print("detected {:d} objects in image".format(len(detections)))
 
-			# print the detections
-			print("detected {:d} objects in image".format(len(detections)))
-			array = jetson.utils.cudaToNumpy(img, width, height, 4)	
-			buf = BytesIO()	
-			for detection in detections:
-				print(detection)
-				# aimg = cv2.cvtColor(array.astype(numpy.uint8), cv2.COLOR_RGBA2BGR)
-				# cv2.imshow("Detection", aimg)
-				# cv2.waitKey()
-				# print(array.dtype)
-				# print(array.shape)    
-				im = Image.fromarray(array.astype(numpy.uint8), "RGBA")
-				crop = im.crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
-				crop.save(buf, format="png")
-				# cuda_mem = jetson.utils.cudaFromNumpy(numpy.array(crop))
-				# jetson.utils.saveImageRGBA(path, cuda_mem, int(detection.Width), int(detection.Height))
-				
-				await upload(session, buf.getvalue())
-			# render the image
-			# display.RenderOnce(img, width, height)
-
-			# update the title bar
-			# display.SetTitle("{:s} | Network {:.0f} FPS".format(opt.network, net.GetNetworkFPS()))
-
-			# print out performance info
+				executor.submit(crop(opt.camera, img, width, height, detections, img_queue))
+				loop.create_task(upload(session, img_queue))
+			
 			net.PrintProfilerTimes()
 
 
 if __name__  == "__main__":
 	loop = asyncio.get_event_loop()
 	loop.run_until_complete(main())
+
