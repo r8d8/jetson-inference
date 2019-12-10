@@ -36,7 +36,7 @@ from io import BytesIO
 from aiohttp.web import HTTPCreated
 import multiprocessing
 import concurrent.futures
-from datetime import datetime
+import time
 
 API_KEY = "abb6a29f-d60c-499f-a8e9-57a1af56c1a0" 
 
@@ -69,17 +69,17 @@ async def upload(session, image_queue):
 	if response.status != HTTPCreated.status_code:
 		print(">>> DEBUG: image upload failure. Request status code: ", response.status)
 
-def crop(camera_id, img, width, height, detections, image_queue):
+def crop(camera_id, img, width, height, detection, image_queue):
 	array = jetson.utils.cudaToNumpy(img, width, height, 4)	
 	buf = BytesIO()	
-	for detection in detections:
-		print(detection)    
-		im = Image.fromarray(array.astype(numpy.uint8), "RGBA").crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
-		im.save(buf, format="png")
+	
+	print(detection)    
+	im = Image.fromarray(array.astype(numpy.uint8), "RGBA").crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
+	im.save(buf, format="png")
 
-		crop = CropImage(buf.getvalue(), 1, camera_id, datetime.now().strftime("%m/%d/%Y, %H:%M:%S"), (0, 0))
+	crop = CropImage(buf.getvalue(), 1, camera_id, time.time(), (0, 0))
 
-		image_queue.put(crop)
+	image_queue.put(crop)
 		
 
 async def main():
@@ -119,10 +119,10 @@ async def main():
 			detections = net.Detect(img, width, height, opt.overlay)
 			if len(detections):
 				print("detected {:d} objects in image".format(len(detections)))
-
-				executor.submit(crop(opt.camera, img, width, height, detections, img_queue))
-				loop.create_task(upload(session, img_queue))
-			
+				for detection in detections:
+					executor.submit(crop(opt.camera, img, width, height, detection, img_queue))
+					loop.create_task(upload(session, img_queue))
+				
 			net.PrintProfilerTimes()
 
 
