@@ -74,7 +74,7 @@ async def upload(session, img):
 		logging.error("Image upload failure. Request status code: " + str(response.status))
 	logging.info("Image uploaded: " + str(img.crop_id))
 
-def crop(camera_id, img, width, height, detection, image_queue):
+def crop(camera_id, img, width, height, detection):
 	array = jetson.utils.cudaToNumpy(img, width, height, 4)	
 	buf = BytesIO()	
 	
@@ -85,35 +85,27 @@ def crop(camera_id, img, width, height, detection, image_queue):
 	with CROP_COUNT_LOCK:
 		global CROP_COUNT
 		crop_id = (camera_id << 24) + CROP_COUNT 
-		crop = CropImage(buf.getvalue(), crop_id, camera_id, time.time(), (0, 0))
 		CROP_COUNT += 1
+		crop = CropImage(buf.getvalue(), crop_id, camera_id, time.time(), (0, 0))
 
-	image_queue.put(crop)
-		
-def detect(net, camera, img_queue, executor, opt):
-	while True:
-		# capture the image
-		img, width, height = camera.CaptureRGBA(zeroCopy=1)
-		jetson.utils.cudaDeviceSynchronize()
-		detections = net.Detect(img, width, height, opt.overlay)
-		if len(detections):
-			print("detected {:d} objects in image".format(len(detections)))
-			for detection in detections:
-				executor.submit(crop(opt.camera_id, img, width, height, detection, img_queue))
-	
-		# net.PrintProfilerTimes()
+	return crop
 
-async def main(img_queue):
+async def main(opt, camera):
 	loop = asyncio.get_event_loop()
 	async with aiohttp.ClientSession() as session:
 		while True:
-			try:
-				img = img_queue.get_nowait()
-				loop.create_task(upload(session, img))
-				await asyncio.sleep(0.5)
-			except queue.Empty:
-				await asyncio.sleep(0.5)
-
+			# capture the image
+			img, width, height = camera.CaptureRGBA(zeroCopy=1)
+			jetson.utils.cudaDeviceSynchronize()
+			detections = net.Detect(img, width, height, opt.overlay)
+			if len(detections):
+				logging.info("detected {:d} objects in image".format(len(detections)))
+				for detection in detections:
+					c = crop(opt.camera_id, img, width, height, detection)
+					loop.create_task(upload(session, c))
+				
+				await asyncio.sleep(1)
+					
 
 if __name__  == "__main__":
 	# parse the command line
@@ -142,21 +134,16 @@ if __name__  == "__main__":
 
 	# create the camera and display
 	camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
-	executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
-	img_queue = queue.Queue()
-
-	detect_thread = threading.Thread(target=detect, args=(net, camera, img_queue, executor, opt))
-	detect_thread.setDaemon(True)
-	detect_thread.start()
+	# executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
 	loop = asyncio.get_event_loop()
 	try:
-		asyncio.ensure_future(main(img_queue))
+		asyncio.ensure_future(main(opt, camera))
 		loop.run_forever()
 	except KeyboardInterrupt:
 		pass
 	finally:
-		detect_thread.join()
-		executor.shutdown(wait=False)
+		# executor.shutdown(wait=False)
+		asyncio.gather(*asyncio.Task.all_tasks())
 		loop.close()
 		logging.info("Execution canceled")
