@@ -34,7 +34,7 @@ import asyncio
 import json
 from io import BytesIO
 from aiohttp.web import HTTPCreated
-import multiprocessing
+import queue
 import concurrent.futures
 import time
 import threading
@@ -107,9 +107,13 @@ async def main(img_queue):
 	loop = asyncio.get_event_loop()
 	async with aiohttp.ClientSession() as session:
 		while True:
-			loop.create_task(upload(session, img_queue.get()))
-			await asyncio.sleep(0.5)
-	
+			try:
+				img = img_queue.get_nowait()
+				loop.create_task(upload(session, img))
+				await asyncio.sleep(0.5)
+			except queue.Empty:
+				await asyncio.sleep(0.5)
+
 
 if __name__  == "__main__":
 	# parse the command line
@@ -139,9 +143,10 @@ if __name__  == "__main__":
 	# create the camera and display
 	camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
-	img_queue = multiprocessing.Queue()
+	img_queue = queue.Queue()
 
 	detect_thread = threading.Thread(target=detect, args=(net, camera, img_queue, executor, opt))
+	detect_thread.setDaemon(True)
 	detect_thread.start()
 
 	loop = asyncio.get_event_loop()
