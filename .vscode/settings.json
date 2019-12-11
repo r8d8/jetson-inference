@@ -1,5 +1,5 @@
 {
-    "python.pythonPath": "/home/k2/Workbench/jetson-inference/venv/bin/python3.7",
+    "python.pythonPath": "/usr/bin/python3",
     "python.linting.pylintEnabled": true,
     "python.linting.enabled": true,
     "C_Cpp.default.configurationProvider": "vector-of-bool.cmake-tools"

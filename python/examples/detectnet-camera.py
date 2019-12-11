@@ -37,6 +37,8 @@ from aiohttp.web import HTTPCreated
 import multiprocessing
 import concurrent.futures
 import time
+import threading
+
 
 API_KEY = "abb6a29f-d60c-499f-a8e9-57a1af56c1a0" 
 
@@ -48,9 +50,9 @@ class CropImage:
 		self.timestamp = timestamp 
 		self.location = location
 
-async def upload(session, image_queue):
+async def upload(session, img):
+	print(">>> UPLOADING")
 	data = aiohttp.FormData()
-	img = image_queue.get()
 	data.add_field('metadata', json.dumps({
 		'crop_id': img.crop_id,
 		'camera_id': img.camera_id,
@@ -81,8 +83,28 @@ def crop(camera_id, img, width, height, detection, image_queue):
 
 	image_queue.put(crop)
 		
+def detect(net, camera, img_queue, executor, opt):
+	while True:
+		# capture the image
+		img, width, height = camera.CaptureRGBA(zeroCopy=1)
+		jetson.utils.cudaDeviceSynchronize()
+		detections = net.Detect(img, width, height, opt.overlay)
+		if len(detections):
+			print("detected {:d} objects in image".format(len(detections)))
+			for detection in detections:
+				executor.submit(crop(opt.camera, img, width, height, detection, img_queue))
+	
+		# net.PrintProfilerTimes()
 
-async def main():
+async def main(img_queue):
+	loop = asyncio.get_event_loop()
+	async with aiohttp.ClientSession() as session:
+		while True:
+			loop.create_task(upload(session, img_queue.get()))
+			await asyncio.sleep(1)
+	
+
+if __name__  == "__main__":
 	# parse the command line
 	parser = argparse.ArgumentParser(description="Locate objects in a live camera stream using an object detection DNN.", 
 							formatter_class=argparse.RawTextHelpFormatter, epilog=jetson.inference.detectNet.Usage())
@@ -106,27 +128,20 @@ async def main():
 
 	# create the camera and display
 	camera = jetson.utils.gstCamera(opt.width, opt.height, opt.camera)
-	executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
-
-	# process frames until user exits
+	executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 	img_queue = multiprocessing.Queue()
+
+	detect_thread = threading.Thread(target=detect, args=(net, camera, img_queue, executor, opt))
+	detect_thread.start()
+
 	loop = asyncio.get_event_loop()
-	async with aiohttp.ClientSession() as session:
-		while True:
-			# capture the image
-			img, width, height = camera.CaptureRGBA(zeroCopy=1)
-			jetson.utils.cudaDeviceSynchronize()
-			detections = net.Detect(img, width, height, opt.overlay)
-			if len(detections):
-				print("detected {:d} objects in image".format(len(detections)))
-				for detection in detections:
-					executor.submit(crop(opt.camera, img, width, height, detection, img_queue))
-					loop.create_task(upload(session, img_queue))
-				
-			net.PrintProfilerTimes()
-
-
-if __name__  == "__main__":
-	loop = asyncio.get_event_loop()
-	loop.run_until_complete(main())
-
+	try:
+		asyncio.ensure_future(main(img_queue))
+		loop.run_forever()
+	except KeyboardInterrupt:
+		pass
+	finally:
+		detect_thread.join()
+		executor.shutdown(wait=True)
+		loop.close()
+		print("Execution canceled")
