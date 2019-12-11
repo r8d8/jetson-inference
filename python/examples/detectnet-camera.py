@@ -38,9 +38,12 @@ import multiprocessing
 import concurrent.futures
 import time
 import threading
+import logging
 
 
 API_KEY = "abb6a29f-d60c-499f-a8e9-57a1af56c1a0" 
+CROP_COUNT_LOCK = threading.Lock()
+CROP_COUNT = 0
 
 class CropImage:
 	def __init__(self, data, crop_id, camera_id, timestamp, location):
@@ -51,7 +54,6 @@ class CropImage:
 		self.location = location
 
 async def upload(session, img):
-	print(">>> UPLOADING")
 	data = aiohttp.FormData()
 	data.add_field('metadata', json.dumps({
 		'crop_id': img.crop_id,
@@ -69,7 +71,8 @@ async def upload(session, img):
 										data=data, headers={'X-Traces-API-Key': API_KEY})
 	
 	if response.status != HTTPCreated.status_code:
-		print(">>> DEBUG: image upload failure. Request status code: ", response.status)
+		logging.error("Image upload failure. Request status code: " + str(response.status))
+	logging.info("Image uploaded: " + str(img.crop_id))
 
 def crop(camera_id, img, width, height, detection, image_queue):
 	array = jetson.utils.cudaToNumpy(img, width, height, 4)	
@@ -79,7 +82,11 @@ def crop(camera_id, img, width, height, detection, image_queue):
 	im = Image.fromarray(array.astype(numpy.uint8), "RGBA").crop((detection.Left, detection.Top, detection.Right, detection.Bottom))
 	im.save(buf, format="png")
 
-	crop = CropImage(buf.getvalue(), 1, camera_id, time.time(), (0, 0))
+	with CROP_COUNT_LOCK:
+		global CROP_COUNT
+		crop_id = (camera_id << 24) + CROP_COUNT 
+		crop = CropImage(buf.getvalue(), crop_id, camera_id, time.time(), (0, 0))
+		CROP_COUNT += 1
 
 	image_queue.put(crop)
 		
@@ -92,7 +99,7 @@ def detect(net, camera, img_queue, executor, opt):
 		if len(detections):
 			print("detected {:d} objects in image".format(len(detections)))
 			for detection in detections:
-				executor.submit(crop(opt.camera, img, width, height, detection, img_queue))
+				executor.submit(crop(opt.camera_id, img, width, height, detection, img_queue))
 	
 		# net.PrintProfilerTimes()
 
@@ -101,7 +108,7 @@ async def main(img_queue):
 	async with aiohttp.ClientSession() as session:
 		while True:
 			loop.create_task(upload(session, img_queue.get()))
-			await asyncio.sleep(1)
+			await asyncio.sleep(0.5)
 	
 
 if __name__  == "__main__":
@@ -115,6 +122,7 @@ if __name__  == "__main__":
 	parser.add_argument("--camera", type=str, default="0", help="index of the MIPI CSI camera to use (e.g. CSI camera 0)\nor for VL42 cameras, the /dev/video device to use.\nby default, MIPI CSI camera 0 will be used.")
 	parser.add_argument("--width", type=int, default=1280, help="desired width of camera stream (default is 1280 pixels)")
 	parser.add_argument("--height", type=int, default=720, help="desired height of camera stream (default is 720 pixels)")
+	parser.add_argument("--camera_id", type=int, default=0, help="demo camera index")
 
 	try:
 		opt = parser.parse_known_args()[0]
@@ -122,6 +130,8 @@ if __name__  == "__main__":
 		print("")
 		parser.print_help()
 		sys.exit(0)
+
+	logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)	
 
 	# load the object detection network
 	net = jetson.inference.detectNet(opt.network, sys.argv, opt.threshold)
@@ -142,6 +152,6 @@ if __name__  == "__main__":
 		pass
 	finally:
 		detect_thread.join()
-		executor.shutdown(wait=True)
+		executor.shutdown(wait=False)
 		loop.close()
-		print("Execution canceled")
+		logging.info("Execution canceled")
