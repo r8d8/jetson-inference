@@ -2,3 +2,5 @@ build/
 data/networks/
 *.pyc
 *.tar.gz
+
+/.idea
