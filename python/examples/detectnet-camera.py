@@ -53,27 +53,6 @@ class CropImage:
 		self.timestamp = timestamp 
 		self.location = location
 
-async def upload(session, img):
-	data = aiohttp.FormData()
-	data.add_field('metadata', json.dumps({
-		'crop_id': img.crop_id,
-		'camera_id': img.camera_id,
-		'timestamp': img.timestamp,
-		'location': {
-			'latitude': img.location[0],
-			'longitude': img.location[1],
-		},
-		'tags': ['aff'],
-	}))
-	data.add_field('image', img.data, filename='image.png')
-
-	response = await session.post('http://3.16.160.221/api/v1/uploadCropWithMetadata',
-										data=data, headers={'X-Traces-API-Key': API_KEY})
-	
-	if response.status != HTTPCreated.status_code:
-		logging.error("Image upload failure. Request status code: " + str(response.status))
-	logging.info("Image uploaded: " + str(img.crop_id))
-
 def crop(camera_id, img, width, height, detection):
 	array = jetson.utils.cudaToNumpy(img, width, height, 4)	
 	buf = BytesIO()	
@@ -90,6 +69,30 @@ def crop(camera_id, img, width, height, detection):
 
 	return crop
 
+async def upload_crop(session, img):
+	data = aiohttp.FormData()
+	data.add_field('metadata', json.dumps({
+		'crop_id': img.crop_id,
+		'camera_id': img.camera_id,
+		'timestamp': img.timestamp,
+		'location': {
+			'latitude': img.location[0],
+			'longitude': img.location[1],
+		},
+		'tags': ['aff'],
+	}))
+	data.add_field('image', img.data, filename='image.png')
+
+	response = await session.post('https://k1.traces.cloud/api/v1/uploadCropsWithMetadata',
+										data=data, headers={'X-Traces-API-Key': API_KEY})
+	
+	if response.status != HTTPCreated.status_code:
+		logging.error("Image upload failure. Request status code: " + str(response.status))
+	logging.info("Image uploaded: " + str(img.crop_id))
+
+def upload_frame(session, img):
+	pass
+
 async def main(opt, camera):
 	loop = asyncio.get_event_loop()
 	async with aiohttp.ClientSession() as session:
@@ -102,7 +105,7 @@ async def main(opt, camera):
 				logging.info("detected {:d} objects in image".format(len(detections)))
 				for detection in detections:
 					c = crop(opt.camera_id, img, width, height, detection)
-					loop.create_task(upload(session, c))
+					loop.create_task(upload_crop(session, c))
 				
 				await asyncio.sleep(1)
 					
