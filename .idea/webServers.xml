@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="9e308155-6992-4c49-922e-b1f252acbaa3" name="jetson_nano" url="http://10.0.0.2">
+        <fileTransfer host="10.0.0.2" port="22" privateKey="$USER_HOME$/.ssh/id_rsa" rootFolder="/home/k2" accessType="SFTP" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+          <option name="port" value="22" />
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
