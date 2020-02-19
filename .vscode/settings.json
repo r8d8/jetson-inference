@@ -1,0 +1,6 @@
+{
+    "python.pythonPath": "/usr/bin/python3",
+    "python.linting.pylintEnabled": true,
+    "python.linting.enabled": true,
+    "C_Cpp.default.configurationProvider": "vector-of-bool.cmake-tools"
+}

@@ -26,6 +26,34 @@
 #include "commandLine.h"
 #include "cudaMappedMemory.h"
 
+#include <string>
+#include <iostream>
+// #include <filesystem>
+#include <vector>
+// namespace fs = std::filesystem;
+
+#include <sys/types.h>
+#include <dirent.h>
+ 
+int read_directory(const std::string& name, std::vector<std::string>& frames)
+{
+    DIR *dir;
+	struct dirent *ent;
+	if ((dir = opendir(name.c_str())) != NULL) {
+		/* print all the files and directories within directory */
+		while ((ent = readdir(dir)) != NULL) {
+			frames.push_back(ent->d_name);
+			printf("%s\n", ent->d_name);
+		}
+		closedir(dir);
+	} else {
+		/* could not open directory */
+		perror("");
+		return EXIT_FAILURE;
+	}
+
+	return 1;
+}
 
 int usage()
 {
@@ -57,12 +85,20 @@ int main( int argc, char** argv )
 
 	if( cmdLine.GetFlag("help") )
 		return usage();
-	
+
+	std::vector<std::string> frames; 
+	std::string path = "/home/k2/Workbench/jetson-inference/build/aarch64/bin/frames";
+	if ( !read_directory(path, frames) )
+	{
+		printf("detectnet-console:   failed to initialize detectNet\n");
+		return 0;
+	}
 
 	/*
 	 * parse input filename
 	 */
-	const char* imgFilename = cmdLine.GetPosition(0);
+	// const char* imgFilename = cmdLine.GetPosition(0);
+	const char* imgFilename = (path + std::string("/") + frames.back()).c_str();
 
 	if( !imgFilename )
 	{
